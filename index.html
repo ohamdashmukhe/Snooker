@@ -275,6 +275,22 @@
     font-family: 'Inter', sans-serif;
   }
 
+  .remove-red-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 0.78rem;
+    color: rgba(245,239,224,0.7);
+    cursor: pointer;
+  }
+  .remove-red-check input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--red);
+    cursor: pointer;
+  }
+
   /* Frame controls */
   .frame-bar {
     display: flex;
@@ -344,9 +360,70 @@
   }
 
   .hidden { display: none !important; }
+
+  /* Toast */
+  #toastWrap {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    pointer-events: none;
+  }
+  .toast {
+    background: linear-gradient(135deg, #C9302C, #8f1f1c);
+    color: #fff2ee;
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.08) inset;
+    animation: toastIn 0.35s cubic-bezier(.2,1.4,.4,1), toastOut 0.35s ease-in 1.85s forwards;
+    white-space: nowrap;
+  }
+  .toast.pot {
+    background: linear-gradient(135deg, #1e8f52, #0d5230);
+  }
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(-16px) scale(0.9); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes toastOut {
+    from { opacity: 1; }
+    to   { opacity: 0; transform: translateY(-10px) scale(0.95); }
+  }
+
+  /* Score pop */
+  @keyframes scorePop {
+    0%   { transform: scale(1); }
+    35%  { transform: scale(1.32); }
+    100% { transform: scale(1); }
+  }
+  .player-score.pop { animation: scorePop 0.45s cubic-bezier(.2,1.6,.4,1); }
+
+  @keyframes cardGlow {
+    0%   { box-shadow: 0 0 0 0 rgba(201,169,97,0); }
+    30%  { box-shadow: 0 0 0 6px rgba(201,169,97,0.35); }
+    100% { box-shadow: 0 0 0 0 rgba(201,169,97,0); }
+  }
+  .player-card.glow { animation: cardGlow 0.7s ease-out; }
+
+  .player-card.foul-hit { border-color: #C9302C; }
+  .player-card.foul-hit .player-score { color: #ff9d8f; }
+
+  @keyframes foulPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(201,48,44,0.5); }
+    50%      { box-shadow: 0 0 0 5px rgba(201,48,44,0.18); }
+  }
+  .action-btn.foul.open-pulse { animation: foulPulse 1.4s ease-in-out infinite; }
 </style>
 </head>
 <body>
+<div id="toastWrap"></div>
 <div class="wrap">
   <header>
     <h1>Snooker Scorecard</h1>
@@ -365,6 +442,7 @@
   <div id="gameScreen" class="hidden">
     <div class="frame-bar">
       <span id="frameLabel">Frame 1</span>
+      <span id="redsLabel">Reds on table: 15</span>
       <div style="display:flex; gap:8px;">
         <button id="newFrameBtn">New frame</button>
         <button id="resetBtn">Reset match</button>
@@ -389,14 +467,21 @@
         <button class="action-btn" id="endTurnBtn">End turn / Switch</button>
         <button class="action-btn foul" id="foulBtn">Foul</button>
       </div>
+      <div class="action-row">
+        <button class="action-btn foul" id="removeRedBtn">● Remove a red (no penalty)</button>
+      </div>
       <div class="foul-panel" id="foulPanel">
-        <div class="panel-title">Foul points awarded to opponent (next player)</div>
+        <div class="panel-title" id="foulPanelTitle">Foul points awarded to opponent (next player)</div>
         <div class="foul-vals">
           <button class="foul-val-btn" data-foul="4">4</button>
           <button class="foul-val-btn" data-foul="5">5</button>
           <button class="foul-val-btn" data-foul="6">6</button>
           <button class="foul-val-btn" data-foul="7">7</button>
         </div>
+        <label class="remove-red-check">
+          <input type="checkbox" id="removeRedCheck" />
+          Red was potted illegally — remove it from the table too
+        </label>
       </div>
     </div>
 
@@ -431,6 +516,7 @@
       players: [],       // [{id, name, score, frameWins, currentBreak}]
       currentIdx: 0,
       frame: 1,
+      redsRemaining: 15,
       history: []         // [{frame, playerName, type, points, resultingScore, time}]
     };
   }
@@ -440,6 +526,7 @@
       const res = await window.storage.get('match-state', false);
       if (res && res.value) {
         state = JSON.parse(res.value);
+        if (state.redsRemaining === undefined) state.redsRemaining = 15;
       } else {
         state = defaultState();
       }
@@ -458,6 +545,18 @@
   }
 
   function uid(){ return 'p' + Math.random().toString(36).slice(2,9); }
+
+  function showToast(msg, kind){
+    const wrap = document.getElementById('toastWrap');
+    const el = document.createElement('div');
+    el.className = 'toast' + (kind ? ' ' + kind : '');
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(() => el.remove(), 2200);
+  }
+
+  let flashPlayerIds = [];
+  let flashKind = null; // 'pop' or 'glow'
 
   function renderSetupInputs(names){
     playerInputs.innerHTML = '';
@@ -522,19 +621,57 @@
     p.score += points;
     p.currentBreak += points;
     addHistory({ playerName: p.name, type: 'pot', points: points });
+    flashPlayerIds = [p.id];
+    flashKind = 'pop';
+    if (p.currentBreak >= 20 && p.currentBreak - points < 20) {
+      showToast(p.name + ' is on a break of ' + p.currentBreak + '! 🎱', 'pot');
+    }
     saveState();
     render();
   }
 
   function foul(points){
     const fouler = currentPlayer();
-    const nextIdx = (state.currentIdx + 1) % state.players.length;
-    const opponent = state.players[nextIdx];
-    opponent.score += points;
     fouler.currentBreak = 0;
-    addHistory({ playerName: opponent.name, type: 'foul (' + fouler.name + ')', points: points });
+    const removeRed = document.getElementById('removeRedCheck').checked;
+    let redRemoved = false;
+    if (removeRed && state.redsRemaining > 0) {
+      state.redsRemaining -= 1;
+      redRemoved = true;
+    }
+
+    let nextIdx;
+    if (state.players.length > 2) {
+      // Award foul points to every other player on the table
+      const others = state.players.filter(p => p.id !== fouler.id);
+      others.forEach(p => p.score += points);
+      const names = others.map(p => p.name).join(', ');
+      addHistory({ playerName: names, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved, allPlayers: true });
+      nextIdx = (state.currentIdx + 1) % state.players.length;
+      flashPlayerIds = others.map(p => p.id);
+      showToast('Foul! +' + points + ' to everyone else', 'foul');
+    } else {
+      nextIdx = (state.currentIdx + 1) % state.players.length;
+      const opponent = state.players[nextIdx];
+      opponent.score += points;
+      addHistory({ playerName: opponent.name, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved });
+      flashPlayerIds = [opponent.id];
+      showToast('Foul! +' + points + ' to ' + opponent.name, 'foul');
+    }
+    flashKind = 'foul-hit';
+
     state.currentIdx = nextIdx;
     foulPanel.classList.remove('open');
+    document.getElementById('foulBtn').classList.remove('open-pulse');
+    document.getElementById('removeRedCheck').checked = false;
+    saveState();
+    render();
+  }
+
+  function removeRedOnly(){
+    if (state.redsRemaining <= 0) return;
+    state.redsRemaining -= 1;
+    addHistory({ playerName: currentPlayer().name, type: 'red removed', points: 0 });
     saveState();
     render();
   }
@@ -554,10 +691,23 @@
     if (state.history.length === 0) return;
     const last = state.history[0];
     // find the player it affected and reverse
-    const player = state.players.find(pl => pl.name === last.playerName);
-    if (player && (last.type === 'pot' || last.type.startsWith('foul'))) {
-      player.score -= last.points;
-      if (last.type === 'pot') player.currentBreak = Math.max(0, player.currentBreak - last.points);
+    if (last.allPlayers) {
+      const fouler = state.players.find(pl => 'foul (' + pl.name + ')' === last.type);
+      state.players.forEach(p => {
+        if (!fouler || p.id !== fouler.id) p.score -= last.points;
+      });
+    } else {
+      const player = state.players.find(pl => pl.name === last.playerName);
+      if (player && (last.type === 'pot' || last.type.startsWith('foul'))) {
+        player.score -= last.points;
+        if (last.type === 'pot') player.currentBreak = Math.max(0, player.currentBreak - last.points);
+      }
+    }
+    if (last.type.startsWith('foul') && last.redRemoved) {
+      state.redsRemaining = Math.min(15, state.redsRemaining + 1);
+    }
+    if (last.type === 'red removed') {
+      state.redsRemaining = Math.min(15, state.redsRemaining + 1);
     }
     state.history.shift();
     saveState();
@@ -573,6 +723,7 @@
     state.players.forEach(p => { p.score = 0; p.currentBreak = 0; });
     state.frame += 1;
     state.currentIdx = 0;
+    state.redsRemaining = 15;
     saveState();
     render();
   }
@@ -596,15 +747,23 @@
     gameScreen.classList.remove('hidden');
     subtitle.textContent = state.players.map(p => p.name).join(' vs ');
     frameLabel.textContent = 'Frame ' + state.frame;
+    document.getElementById('redsLabel').textContent = 'Reds on table: ' + (state.redsRemaining ?? 15);
+    document.getElementById('foulPanelTitle').textContent = state.players.length > 2
+      ? 'Foul points awarded to every other player'
+      : 'Foul points awarded to opponent (next player)';
 
     playersGrid.innerHTML = '';
     state.players.forEach((p, idx) => {
       const card = document.createElement('div');
-      card.className = 'player-card' + (idx === state.currentIdx ? ' active' : '');
+      const isFlashed = flashPlayerIds.includes(p.id);
+      let extraClass = '';
+      if (isFlashed && flashKind === 'foul-hit') extraClass = ' glow foul-hit';
+      else if (isFlashed && flashKind === 'pop') extraClass = ' glow';
+      card.className = 'player-card' + (idx === state.currentIdx ? ' active' : '') + extraClass;
       card.innerHTML = `
         ${idx === state.currentIdx ? '<div class="turn-tag">On table</div>' : ''}
         <div class="player-name">${escapeHtml(p.name)}</div>
-        <div class="player-score">${p.score}</div>
+        <div class="player-score${isFlashed && flashKind === 'pop' ? ' pop' : ''}">${p.score}</div>
         <div class="player-break">${p.currentBreak > 0 ? 'Break: ' + p.currentBreak : (p.frameWins ? 'Frames: ' + p.frameWins : '')}</div>
       `;
       card.addEventListener('click', () => {
@@ -613,7 +772,16 @@
         render();
       });
       playersGrid.appendChild(card);
+      if (isFlashed) {
+        setTimeout(() => {
+          card.classList.remove('glow', 'foul-hit');
+          const scoreEl = card.querySelector('.player-score');
+          if (scoreEl) scoreEl.classList.remove('pop');
+        }, 1600);
+      }
     });
+    flashPlayerIds = [];
+    flashKind = null;
 
     renderHistory();
   }
@@ -627,8 +795,16 @@
       const cls = h.type === 'pot' ? 'pos' : (h.type.startsWith('foul') ? 'pos' : '');
       let label;
       if (h.type === 'pot') label = `${escapeHtml(h.playerName)} potted (+${h.points})`;
-      else if (h.type.startsWith('foul')) label = `${escapeHtml(h.type.replace('foul','Foul by'))} → +${h.points} to ${escapeHtml(h.playerName)}`;
+      else if (h.type.startsWith('foul')) {
+        if (h.allPlayers) {
+          label = `${escapeHtml(h.type.replace('foul','Foul by'))} → +${h.points} to everyone else (${escapeHtml(h.playerName)})`;
+        } else {
+          label = `${escapeHtml(h.type.replace('foul','Foul by'))} → +${h.points} to ${escapeHtml(h.playerName)}`;
+        }
+        if (h.redRemoved) label += ' · red removed';
+      }
       else if (h.type === 'break ended') label = `${escapeHtml(h.playerName)} ended break of ${h.note}`;
+      else if (h.type === 'red removed') label = `Red removed from table (foul)`;
       else if (h.type === 'frame won') label = `🏆 ${escapeHtml(h.playerName)} won frame ${h.frame}`;
       else label = escapeHtml(h.playerName) + ' ' + h.type;
       const pts = h.points > 0 ? `<span class="points pos">+${h.points}</span>` : '';
@@ -649,7 +825,9 @@
   });
   document.getElementById('foulBtn').addEventListener('click', () => {
     foulPanel.classList.toggle('open');
+    document.getElementById('foulBtn').classList.toggle('open-pulse', foulPanel.classList.contains('open'));
   });
+  document.getElementById('removeRedBtn').addEventListener('click', removeRedOnly);
   document.getElementById('endTurnBtn').addEventListener('click', endTurn);
   document.getElementById('undoBtn').addEventListener('click', undo);
   document.getElementById('newFrameBtn').addEventListener('click', newFrame);
