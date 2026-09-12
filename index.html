@@ -163,6 +163,13 @@
     margin-top: 4px;
     min-height: 14px;
   }
+  .player-gap {
+    font-size: 0.7rem;
+    font-weight: 700;
+    margin-top: 3px;
+  }
+  .player-gap.leader { color: var(--gold); }
+  .player-gap.behind { color: rgba(245,239,224,0.55); }
   .turn-tag {
     position: absolute;
     top: -8px;
@@ -203,8 +210,8 @@
   }
 
   .ball-btn {
-    width: 54px;
-    height: 54px;
+    width: 76px;
+    height: 76px;
     border-radius: 50%;
     border: none;
     cursor: pointer;
@@ -213,11 +220,19 @@
     justify-content: center;
     font-family: 'Fraunces', serif;
     font-weight: 700;
-    font-size: 1.1rem;
+    font-size: 1.5rem;
     color: white;
     position: relative;
-    box-shadow: inset -4px -5px 8px rgba(0,0,0,0.35), inset 3px 4px 6px rgba(255,255,255,0.25), 0 3px 6px rgba(0,0,0,0.4);
-    transition: transform 0.08s ease;
+    box-shadow: inset -5px -6px 10px rgba(0,0,0,0.35), inset 4px 5px 7px rgba(255,255,255,0.25), 0 4px 10px rgba(0,0,0,0.45);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
+  }
+  .ball-btn:hover {
+    transform: translateY(-3px) scale(1.06);
+    box-shadow: inset -5px -6px 10px rgba(0,0,0,0.35), inset 4px 5px 7px rgba(255,255,255,0.25), 0 8px 16px rgba(0,0,0,0.5), 0 0 0 4px rgba(201,169,97,0.55);
+  }
+  .ball-btn:focus-visible {
+    outline: none;
+    box-shadow: inset -5px -6px 10px rgba(0,0,0,0.35), inset 4px 5px 7px rgba(255,255,255,0.25), 0 0 0 4px rgba(201,169,97,0.8);
   }
   .ball-btn:active { transform: scale(0.9); }
 
@@ -309,6 +324,18 @@
     font-size: 0.78rem;
     cursor: pointer;
   }
+
+  .points-left-bar {
+    text-align: center;
+    font-size: 0.76rem;
+    color: rgba(245,239,224,0.6);
+    background: rgba(0,0,0,0.15);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 8px 10px;
+    margin-bottom: 14px;
+  }
+  .points-left-bar strong { color: var(--gold); }
 
   /* History */
   .history-toggle {
@@ -448,6 +475,7 @@
         <button id="resetBtn">Reset match</button>
       </div>
     </div>
+    <div class="points-left-bar" id="pointsLeftBar"></div>
 
     <div class="players-grid" id="playersGrid"></div>
 
@@ -753,6 +781,8 @@
       : 'Foul points awarded to opponent (next player)';
 
     playersGrid.innerHTML = '';
+    const maxScore = Math.max(...state.players.map(p => p.score));
+    const leadersCount = state.players.filter(p => p.score === maxScore).length;
     state.players.forEach((p, idx) => {
       const card = document.createElement('div');
       const isFlashed = flashPlayerIds.includes(p.id);
@@ -760,10 +790,17 @@
       if (isFlashed && flashKind === 'foul-hit') extraClass = ' glow foul-hit';
       else if (isFlashed && flashKind === 'pop') extraClass = ' glow';
       card.className = 'player-card' + (idx === state.currentIdx ? ' active' : '') + extraClass;
+      const isLeader = p.score === maxScore && maxScore > 0;
+      const tied = isLeader && leadersCount > 1;
+      let gapHtml;
+      if (maxScore === 0) gapHtml = '';
+      else if (isLeader) gapHtml = `<div class="player-gap leader">${tied ? 'Tied lead' : '👑 Leader'}</div>`;
+      else gapHtml = `<div class="player-gap behind">−${maxScore - p.score} behind</div>`;
       card.innerHTML = `
         ${idx === state.currentIdx ? '<div class="turn-tag">On table</div>' : ''}
         <div class="player-name">${escapeHtml(p.name)}</div>
         <div class="player-score${isFlashed && flashKind === 'pop' ? ' pop' : ''}">${p.score}</div>
+        ${gapHtml}
         <div class="player-break">${p.currentBreak > 0 ? 'Break: ' + p.currentBreak : (p.frameWins ? 'Frames: ' + p.frameWins : '')}</div>
       `;
       card.addEventListener('click', () => {
@@ -783,7 +820,22 @@
     flashPlayerIds = [];
     flashKind = null;
 
+    renderPointsLeft(maxScore);
     renderHistory();
+  }
+
+  function renderPointsLeft(maxScore){
+    const el = document.getElementById('pointsLeftBar');
+    if (!el) return;
+    const reds = state.redsRemaining ?? 15;
+    const pointsLeft = reds * 8 + 27; // max possible: each red+black (8) plus final colour sequence (27)
+    const trailing = state.players.filter(p => p.score < maxScore);
+    const cannotWin = trailing.filter(p => (maxScore - p.score) > pointsLeft).map(p => p.name);
+    let msg = `Points still on table: <strong>${pointsLeft}</strong>`;
+    if (cannotWin.length > 0) {
+      msg += ` · ${escapeHtml(cannotWin.join(', '))} can no longer win outright — needs snookers`;
+    }
+    el.innerHTML = msg;
   }
 
   function renderHistory(){
