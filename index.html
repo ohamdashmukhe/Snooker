@@ -713,6 +713,7 @@
       awaitingColour: state.awaitingColour,
       colourSequenceIndex: state.colourSequenceIndex,
       currentIdx: state.currentIdx,
+      frame: state.frame,
       scores: state.players.map(p => ({ id: p.id, score: p.score, currentBreak: p.currentBreak, frameWins: p.frameWins }))
     };
   }
@@ -723,10 +724,21 @@
     state.awaitingColour = snap.awaitingColour;
     state.colourSequenceIndex = snap.colourSequenceIndex;
     state.currentIdx = snap.currentIdx;
+    state.frame = snap.frame;
     snap.scores.forEach(s => {
       const p = state.players.find(pl => pl.id === s.id);
       if (p) { p.score = s.score; p.currentBreak = s.currentBreak; p.frameWins = s.frameWins; }
     });
+  }
+
+  // Called any time the table's turn moves to a different player without the
+  // required colour being potted. Per casual scoring convention: a red that
+  // isn't followed up simply gets "let go" rather than jamming the next
+  // player into a colour-only lock — they're free to start on a red again.
+  function releaseColourLockIfNeeded(){
+    if (state.redsRemaining > 0 && state.awaitingColour) {
+      state.awaitingColour = false;
+    }
   }
 
   function legalBalls(){
@@ -797,6 +809,7 @@
     flashKind = 'foul-hit';
 
     state.currentIdx = nextIdx;
+    releaseColourLockIfNeeded();
     foulPanel.classList.remove('open');
     document.getElementById('foulBtn').classList.remove('open-pulse');
     document.getElementById('removeRedCheck').checked = false;
@@ -821,6 +834,7 @@
     }
     p.currentBreak = 0;
     state.currentIdx = (state.currentIdx + 1) % state.players.length;
+    releaseColourLockIfNeeded();
     saveState();
     render();
   }
@@ -837,11 +851,12 @@
   }
 
   function newFrame(){
+    const before = snapshotState();
     // determine winner of current frame by highest score
     let winner = state.players[0];
     state.players.forEach(p => { if (p.score > winner.score) winner = p; });
     winner.frameWins += 1;
-    addHistory({ playerName: winner.name, type: 'frame won', points: 0 });
+    addHistory({ playerName: winner.name, type: 'frame won', points: 0, before: before });
     state.players.forEach(p => { p.score = 0; p.currentBreak = 0; });
     state.frame += 1;
     state.currentIdx = 0;
@@ -877,6 +892,13 @@
       : 'Foul points awarded to opponent (next player)';
 
     updateBallAvailability();
+    const removeRedBtn = document.getElementById('removeRedBtn');
+    removeRedBtn.disabled = state.redsRemaining <= 0;
+    removeRedBtn.style.opacity = state.redsRemaining <= 0 ? '0.4' : '1';
+    removeRedBtn.style.cursor = state.redsRemaining <= 0 ? 'not-allowed' : 'pointer';
+    const removeRedCheck = document.getElementById('removeRedCheck');
+    removeRedCheck.disabled = state.redsRemaining <= 0;
+    removeRedCheck.closest('.remove-red-check').style.opacity = state.redsRemaining <= 0 ? '0.4' : '1';
 
     playersGrid.innerHTML = '';
     const maxScore = Math.max(...state.players.map(p => p.score));
@@ -902,9 +924,12 @@
         <div class="player-break">${p.currentBreak > 0 ? 'Break: ' + p.currentBreak : (p.frameWins ? 'Frames: ' + p.frameWins : '')}</div>
       `;
       card.addEventListener('click', () => {
-        state.currentIdx = idx;
-        saveState();
-        render();
+        if (idx !== state.currentIdx) {
+          state.currentIdx = idx;
+          releaseColourLockIfNeeded();
+          saveState();
+          render();
+        }
       });
       playersGrid.appendChild(card);
       if (isFlashed) {
