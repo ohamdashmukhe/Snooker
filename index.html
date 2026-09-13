@@ -248,6 +248,18 @@
   }
   .ball-btn:active { transform: scale(0.9); }
 
+  .ball-btn.illegal {
+    opacity: 0.28;
+    filter: grayscale(0.6);
+    cursor: not-allowed;
+    box-shadow: inset -5px -6px 10px rgba(0,0,0,0.35), inset 4px 5px 7px rgba(255,255,255,0.2);
+  }
+  .ball-btn.illegal:hover { transform: none; }
+
+  .ball-btn.legal-hint {
+    box-shadow: inset -5px -6px 10px rgba(0,0,0,0.35), inset 4px 5px 7px rgba(255,255,255,0.25), 0 4px 10px rgba(0,0,0,0.45), 0 0 0 3px rgba(201,169,97,0.7);
+  }
+
   .ball-red    { background: #B22016; }
   .ball-yellow { background: #E8B923; color: #3a2c00; }
   .ball-green  { background: #157A3E; }
@@ -524,15 +536,15 @@
     <div class="players-grid" id="playersGrid"></div>
 
     <div class="panel">
-      <div class="panel-title">Pot a ball for the player on the table</div>
+      <div class="panel-title" id="ballPanelTitle">Pot a ball for the player on the table</div>
       <div class="balls-row">
-        <button class="ball-btn ball-red" data-points="1">1</button>
-        <button class="ball-btn ball-yellow" data-points="2">2</button>
-        <button class="ball-btn ball-green" data-points="3">3</button>
-        <button class="ball-btn ball-brown" data-points="4">4</button>
-        <button class="ball-btn ball-blue" data-points="5">5</button>
-        <button class="ball-btn ball-pink" data-points="6">6</button>
-        <button class="ball-btn ball-black" data-points="7">7</button>
+        <button class="ball-btn ball-red" data-points="1" data-ball="red">1</button>
+        <button class="ball-btn ball-yellow" data-points="2" data-ball="yellow">2</button>
+        <button class="ball-btn ball-green" data-points="3" data-ball="green">3</button>
+        <button class="ball-btn ball-brown" data-points="4" data-ball="brown">4</button>
+        <button class="ball-btn ball-blue" data-points="5" data-ball="blue">5</button>
+        <button class="ball-btn ball-pink" data-points="6" data-ball="pink">6</button>
+        <button class="ball-btn ball-black" data-points="7" data-ball="black">7</button>
       </div>
       <div class="action-row">
         <button class="action-btn undo" id="undoBtn">↺ Undo last</button>
@@ -589,9 +601,14 @@
       currentIdx: 0,
       frame: 1,
       redsRemaining: 15,
+      awaitingColour: false,   // true = a red was just potted, any colour is now legal
+      colourSequenceIndex: 0,  // used once redsRemaining === 0
       history: []         // [{frame, playerName, type, points, resultingScore, time}]
     };
   }
+
+  const COLOUR_ORDER = ['yellow', 'green', 'brown', 'blue', 'pink', 'black'];
+  const BALL_POINTS = { red: 1, yellow: 2, green: 3, brown: 4, blue: 5, pink: 6, black: 7 };
 
   async function loadState(){
     try {
@@ -599,6 +616,8 @@
       if (res && res.value) {
         state = JSON.parse(res.value);
         if (state.redsRemaining === undefined) state.redsRemaining = 15;
+        if (state.awaitingColour === undefined) state.awaitingColour = false;
+        if (state.colourSequenceIndex === undefined) state.colourSequenceIndex = 0;
       } else {
         state = defaultState();
       }
@@ -688,11 +707,55 @@
     }, entry));
   }
 
-  function pot(points){
+  function snapshotState(){
+    return {
+      redsRemaining: state.redsRemaining,
+      awaitingColour: state.awaitingColour,
+      colourSequenceIndex: state.colourSequenceIndex,
+      currentIdx: state.currentIdx,
+      scores: state.players.map(p => ({ id: p.id, score: p.score, currentBreak: p.currentBreak, frameWins: p.frameWins }))
+    };
+  }
+
+  function restoreSnapshot(snap){
+    if (!snap) return;
+    state.redsRemaining = snap.redsRemaining;
+    state.awaitingColour = snap.awaitingColour;
+    state.colourSequenceIndex = snap.colourSequenceIndex;
+    state.currentIdx = snap.currentIdx;
+    snap.scores.forEach(s => {
+      const p = state.players.find(pl => pl.id === s.id);
+      if (p) { p.score = s.score; p.currentBreak = s.currentBreak; p.frameWins = s.frameWins; }
+    });
+  }
+
+  function legalBalls(){
+    if (state.redsRemaining > 0 && !state.awaitingColour) return ['red'];
+    if (state.awaitingColour) return ['yellow','green','brown','blue','pink','black'];
+    if (state.colourSequenceIndex < COLOUR_ORDER.length) return [COLOUR_ORDER[state.colourSequenceIndex]];
+    return [];
+  }
+
+  function pot(ballName, points){
+    if (!legalBalls().includes(ballName)) return; // guard against illegal taps
+    const before = snapshotState();
     const p = currentPlayer();
     p.score += points;
     p.currentBreak += points;
-    addHistory({ playerName: p.name, type: 'pot', points: points });
+
+    if (ballName === 'red') {
+      state.redsRemaining = Math.max(0, state.redsRemaining - 1);
+      state.awaitingColour = true;
+    } else {
+      if (state.awaitingColour) {
+        state.awaitingColour = false;
+        // if reds remain, next required is red again; if not, colour sequence starts fresh at 0
+      } else if (state.redsRemaining === 0) {
+        state.colourSequenceIndex = Math.min(COLOUR_ORDER.length, state.colourSequenceIndex + 1);
+      }
+    }
+
+    addHistory({ playerName: p.name, type: 'pot', points: points, before: before });
     flashPlayerIds = [p.id];
     flashKind = 'pop';
     if (p.currentBreak >= 20 && p.currentBreak - points < 20) {
@@ -703,6 +766,7 @@
   }
 
   function foul(points){
+    const before = snapshotState();
     const fouler = currentPlayer();
     fouler.currentBreak = 0;
     const removeRed = document.getElementById('removeRedCheck').checked;
@@ -718,7 +782,7 @@
       const others = state.players.filter(p => p.id !== fouler.id);
       others.forEach(p => p.score += points);
       const names = others.map(p => p.name).join(', ');
-      addHistory({ playerName: names, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved, allPlayers: true });
+      addHistory({ playerName: names, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved, allPlayers: true, before: before });
       nextIdx = (state.currentIdx + 1) % state.players.length;
       flashPlayerIds = others.map(p => p.id);
       showToast('Foul! +' + points + ' to everyone else', 'foul');
@@ -726,7 +790,7 @@
       nextIdx = (state.currentIdx + 1) % state.players.length;
       const opponent = state.players[nextIdx];
       opponent.score += points;
-      addHistory({ playerName: opponent.name, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved });
+      addHistory({ playerName: opponent.name, type: 'foul (' + fouler.name + ')', points: points, redRemoved: redRemoved, before: before });
       flashPlayerIds = [opponent.id];
       showToast('Foul! +' + points + ' to ' + opponent.name, 'foul');
     }
@@ -742,16 +806,18 @@
 
   function removeRedOnly(){
     if (state.redsRemaining <= 0) return;
+    const before = snapshotState();
     state.redsRemaining -= 1;
-    addHistory({ playerName: currentPlayer().name, type: 'red removed', points: 0 });
+    addHistory({ playerName: currentPlayer().name, type: 'red removed', points: 0, before: before });
     saveState();
     render();
   }
 
   function endTurn(){
+    const before = snapshotState();
     const p = currentPlayer();
     if (p.currentBreak > 0) {
-      addHistory({ playerName: p.name, type: 'break ended', points: 0, note: p.currentBreak });
+      addHistory({ playerName: p.name, type: 'break ended', points: 0, note: p.currentBreak, before: before });
     }
     p.currentBreak = 0;
     state.currentIdx = (state.currentIdx + 1) % state.players.length;
@@ -762,24 +828,8 @@
   function undo(){
     if (state.history.length === 0) return;
     const last = state.history[0];
-    // find the player it affected and reverse
-    if (last.allPlayers) {
-      const fouler = state.players.find(pl => 'foul (' + pl.name + ')' === last.type);
-      state.players.forEach(p => {
-        if (!fouler || p.id !== fouler.id) p.score -= last.points;
-      });
-    } else {
-      const player = state.players.find(pl => pl.name === last.playerName);
-      if (player && (last.type === 'pot' || last.type.startsWith('foul'))) {
-        player.score -= last.points;
-        if (last.type === 'pot') player.currentBreak = Math.max(0, player.currentBreak - last.points);
-      }
-    }
-    if (last.type.startsWith('foul') && last.redRemoved) {
-      state.redsRemaining = Math.min(15, state.redsRemaining + 1);
-    }
-    if (last.type === 'red removed') {
-      state.redsRemaining = Math.min(15, state.redsRemaining + 1);
+    if (last.before) {
+      restoreSnapshot(last.before);
     }
     state.history.shift();
     saveState();
@@ -796,6 +846,8 @@
     state.frame += 1;
     state.currentIdx = 0;
     state.redsRemaining = 15;
+    state.awaitingColour = false;
+    state.colourSequenceIndex = 0;
     saveState();
     render();
   }
@@ -823,6 +875,8 @@
     document.getElementById('foulPanelTitle').textContent = state.players.length > 2
       ? 'Foul points awarded to every other player'
       : 'Foul points awarded to opponent (next player)';
+
+    updateBallAvailability();
 
     playersGrid.innerHTML = '';
     const maxScore = Math.max(...state.players.map(p => p.score));
@@ -866,6 +920,28 @@
 
     renderPointsLeft(maxScore);
     renderHistory();
+  }
+
+  function updateBallAvailability(){
+    const legal = legalBalls();
+    document.querySelectorAll('.ball-btn').forEach(btn => {
+      const ball = btn.dataset.ball;
+      const isLegal = legal.includes(ball);
+      btn.classList.toggle('illegal', !isLegal);
+      btn.classList.toggle('legal-hint', isLegal && legal.length === 1);
+      btn.disabled = !isLegal;
+    });
+
+    const titleEl = document.getElementById('ballPanelTitle');
+    if (legal.length === 0) {
+      titleEl.textContent = 'All reds and colours potted — start a new frame';
+    } else if (legal.length === 1 && legal[0] === 'red') {
+      titleEl.textContent = 'Pot a red ball';
+    } else if (legal.length === 1) {
+      titleEl.textContent = 'Pot the ' + legal[0].charAt(0).toUpperCase() + legal[0].slice(1) + ' (next in sequence)';
+    } else {
+      titleEl.textContent = 'Red potted — now pot any colour';
+    }
   }
 
   function renderPointsLeft(maxScore){
@@ -914,7 +990,7 @@
 
   // Event bindings
   document.querySelectorAll('.ball-btn').forEach(btn => {
-    btn.addEventListener('click', () => pot(parseInt(btn.dataset.points, 10)));
+    btn.addEventListener('click', () => pot(btn.dataset.ball, parseInt(btn.dataset.points, 10)));
   });
   document.querySelectorAll('.foul-val-btn').forEach(btn => {
     btn.addEventListener('click', () => foul(parseInt(btn.dataset.foul, 10)));
